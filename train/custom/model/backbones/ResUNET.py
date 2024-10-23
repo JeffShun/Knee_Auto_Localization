@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding."""
@@ -84,12 +84,12 @@ class DoubleConv(nn.Module):
         return self.conv(input)
 
 
+class ResUNET(nn.Module):
 
-class ResUnet_refine_SPP(nn.Module):
+    def __init__(self, in_ch=1, out_ch=5, channels=16, blocks=3):
+        super(ResUNET, self).__init__()
 
-    def __init__(self, channels=16, blocks=3):
-        super(ResUnet_refine_SPP, self).__init__()
-
+        self.in_conv = DoubleConv(in_ch, channels, stride=2, kernel_size=3)
         self.layer1 = make_res_layer(channels * 1, channels * 2, blocks, stride=2)
         self.layer2 = make_res_layer(channels * 2, channels * 4, blocks, stride=2)
         self.layer3 = make_res_layer(channels * 4, channels * 8, blocks, stride=2)
@@ -104,6 +104,7 @@ class ResUnet_refine_SPP(nn.Module):
         self.up8 = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
         self.conv8 = DoubleConv(channels * 3, channels)
 
+        self.conv_out = nn.Conv3d(channels, out_ch, 1)
 
         self.spp_up_conv1 = nn.Sequential(
                     conv1x1(channels*2, channels),
@@ -119,7 +120,7 @@ class ResUnet_refine_SPP(nn.Module):
                     )
 
     def forward(self, inpt):
-        c1 = inpt
+        c1 = self.in_conv(inpt)
         c2 = self.layer1(c1)
         c3 = self.layer2(c2)
         c4 = self.layer3(c3)
@@ -143,27 +144,15 @@ class ResUnet_refine_SPP(nn.Module):
         out3 = self.spp_up_conv2(c7)
         out4 = self.spp_up_conv3(c6)
         
-        out = out1+out2+out3+out4
+        out = self.conv_out(F.interpolate(out1+out2+out3+out4, scale_factor=2, mode="trilinear"))
 
-        return out
-
-
-
-class Cascaded_ResUnet_refine_SPP(nn.Module):
-    def __init__(self, in_ch, channels=12, blocks=2):
-        super(Cascaded_ResUnet_refine_SPP, self).__init__()
-        self.conv_in = DoubleConv(in_ch, channels, stride=2, kernel_size=3)
-        self.Unet1 = ResUnet_refine_SPP(channels, blocks)
-        self.Unet2 = ResUnet_refine_SPP(channels, blocks)
-    def forward(self, input):
-        fea = self.conv_in(input)
-        out1 = self.Unet1(fea)
-        out2 = self.Unet2(out1)
-        return out1, out2 
+        return [out]
 
 
 
 if __name__ == '__main__':
-    model = Cascaded_ResUnet_refine_SPP(1, 1)
-    print(model)
+    model = ResUNET(in_ch=1, out_ch=5, channels=32, blocks=3).cuda()
+    x = torch.randn((1, 1, 96, 192, 192)).cuda()
+    out = model(x)
+    print(out.shape)
 

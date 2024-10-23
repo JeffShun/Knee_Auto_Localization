@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
+import torch
 
 class Model_Head(nn.Module):
 
@@ -19,3 +20,4 @@ class Model_Head(nn.Module):
         out1 = self.conv1(F.interpolate(input1, scale_factor=2, mode="trilinear"))
         out2 = self.conv2(F.interpolate(input2, scale_factor=2, mode="trilinear"))
         return out1, out2
+    

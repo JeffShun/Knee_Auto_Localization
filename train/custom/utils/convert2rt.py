@@ -14,10 +14,10 @@ sys.path.append(work_dir)
 from config.model_config import network_cfg
 
 
-# D:/软件包/AI定位软件包/TensorRT-8.4.1.5/bin/trtexec.exe --onnx=./checkpoints/onnx_model/Conditional-Restormer-newDC-twoCNN-SSIM-L1-TV.onnx --saveEngine=./checkpoints/trt_model/model.engine --minShapes=images:1x4x128x128 --optShapes=images:6x3x512x512 --maxShapes=images:12x3x1024x1024 --useCudaGraph --noTF32 --fp16
+# D:/软件包/AI定位软件包/TensorRT-8.4.1.5/bin/trtexec.exe --onnx=./checkpoints/onnx_model/model.onnx --saveEngine=./checkpoints/trt_model/model.engine --minShapes=images:1x4x128x128 --optShapes=images:6x3x512x512 --maxShapes=images:12x3x1024x1024 --useCudaGraph --noTF32 --fp16
 # D:/软件包/AI定位软件包/TensorRT-8.4.1.5/bin/trtexec.exe --onnx=./checkpoints/onnx_model/model.onnx --saveEngine=./checkpoints/trt_model/model.engine --fp16 --workspace=512 --dumpProfile --dumpLayerInfo --profilingVerbosity=detailed --verbose
 def load_model(model_path):
-    model = network_cfg.gen_network
+    model = network_cfg.network
     checkpoint = torch.load(model_path, map_location={"cuda:0":"cuda:0","cuda:1":"cuda:0","cuda:2":"cuda:0","cuda:3":"cuda:0"})
     model.load_state_dict(checkpoint)
     model = model.cuda()
@@ -27,7 +27,7 @@ def load_model(model_path):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', type=str, default='./checkpoints/BigData/Conditional-ResUnet-DPSR-twoCNN-SSIM-L1-TV/Generator/3.pth')
+    parser.add_argument('--model_path', type=str, default='./checkpoints/ResUNET+Refine+AUG+DirectionLoss/90.pth')
     parser.add_argument('--output_onnx', type=str, default='./checkpoints/onnx_model')
     parser.add_argument('--output_trt', type=str, default='./checkpoints/trt_model')
     args = parser.parse_args()
@@ -38,7 +38,7 @@ def torch2onnx(model_path, onnx_path):
     model = load_model(model_path)
     model.eval()
     # 定义示例输入
-    dummy_input = torch.ones((1, 4, 256, 256),requires_grad=True).cuda()
+    dummy_input = torch.ones((1, 1, 96, 192, 192),requires_grad=True).cuda()
     # Export the model   
     torch.onnx.export(
         model,                                                 # model being run 
@@ -49,7 +49,7 @@ def torch2onnx(model_path, onnx_path):
         do_constant_folding=True,                              # whether to execute constant folding for optimization 
         input_names = ['input'],                               # the model's input names 
         output_names = ['output'],                             # the model's output names 
-        dynamic_axes = {"input":[0,2,3]}                       # dynamic axes
+        dynamic_axes = None                                    # dynamic axes
         )
     print('Model has been converted to ONNX!') 
 
@@ -85,7 +85,7 @@ def onnx2trt(onnx_file_path, engine_file_path):
         profile = builder.create_optimization_profile() 
         # 有几个输入就要写几个profile.set_shape 名字和转onnx的时候要对应
         # tensorrt6以后的版本是支持动态输入的，需要给每个动态输入绑定一个profile，用于指定最小值，常规值和最大值，如果超出这个范围会报异常。
-        profile.set_shape("input", (1, 4, 128, 128), (1, 4, 512, 512), (1, 4, 1024, 1024))
+        profile.set_shape("input", (1, 1, 96, 192, 192), (1, 1, 96, 192, 192), (1, 1, 96, 192, 192))
         config.add_optimization_profile(profile)
         engine = builder.build_engine(network, config)
         print("Completed creating Engine")
@@ -93,7 +93,16 @@ def onnx2trt(onnx_file_path, engine_file_path):
         with open(engine_file_path, "wb") as f:
             f.write(engine.serialize())
 
-
+def onnx2trtX(onnx_file_path, engine_file_path):
+    os.system("D:/软件包/AI定位软件包/TensorRT-8.4.1.5/bin/trtexec.exe \
+              --onnx={} \
+              --saveEngine={} \
+              --fp16 \
+              --workspace=16384 \
+              --verbose".format(onnx_file_path, engine_file_path)
+              )
+    print("Completed creating Engine")
+    
 if __name__ == '__main__':
     args = parse_args()
     model_path = args.model_path
@@ -101,12 +110,12 @@ if __name__ == '__main__':
     output_trt_dir = args.output_trt
     print("Beigin torch2onnx!")
     os.makedirs(output_onnx_dir, exist_ok=True)
-    onnx_path = os.path.join(output_onnx_dir, 'Conditional-ResUnet-newDC-twoCNN-SSIM-L1-TV.onnx')
+    onnx_path = os.path.join(output_onnx_dir, 'model.onnx')
     torch2onnx(model_path, onnx_path)
 
     print("Beigin onnx2trt!")
     os.makedirs(output_trt_dir, exist_ok=True)
     engine_file_path = os.path.join(output_trt_dir, 'model.engine')
-    onnx2trt(onnx_path, engine_file_path)
+    onnx2trtX(onnx_path, engine_file_path)
 
 

@@ -38,7 +38,8 @@ def train():
     net = network_cfg.network.to(device)
     net = torch.nn.SyncBatchNorm.convert_sync_batchnorm(net)
     # 定义损失函数
-    loss_func = network_cfg.loss_func
+    train_loss_func = network_cfg.train_loss_func
+    valid_loss_func = network_cfg.valid_loss_func
     # 学习率要根据并行GPU的数量进行倍增
     network_cfg.lr *= network_cfg.world_size  
     init_weight = os.path.join(network_cfg.checkpoints_dir, "initial_weights.pth")
@@ -56,7 +57,7 @@ def train():
         net.load_state_dict(torch.load(init_weight, map_location=device))
 
     # 转为DDP模型
-    net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[network_cfg.gpu])
+    net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[network_cfg.gpu], find_unused_parameters=True)
 
     train_dataset = network_cfg.train_dataset
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=network_cfg.shuffle)
@@ -97,7 +98,7 @@ def train():
             train_data = V(train_data).cuda()
             train_label = V(train_label).cuda()
             t_out = net(train_data)
-            t_loss = loss_func(t_out, train_label)
+            t_loss = train_loss_func(t_out, train_label)
             loss_all = V(torch.zeros(1)).to(device)
             loss_info = ""
             for loss_item, loss_val in t_loss.items():
@@ -131,7 +132,7 @@ def train():
                 valid_label = V(valid_label).cuda()
                 with torch.no_grad():
                     v_out = net(valid_data)
-                    v_loss = loss_func(v_out, valid_label)
+                    v_loss = valid_loss_func(v_out, valid_label)
 
                 for loss_item, loss_val in v_loss.items():
                     if loss_item not in valid_loss:

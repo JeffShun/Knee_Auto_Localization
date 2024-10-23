@@ -8,7 +8,6 @@ import numpy as np
 import SimpleITK as sitk
 from tqdm import tqdm
 from multiprocessing import Pool
-from skimage.morphology import dilation
 
 def parse_args():
     parser = argparse.ArgumentParser()

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
@@ -84,16 +85,16 @@ class DoubleConv(nn.Module):
         return self.conv(input)
 
 
+class ResUNET_Twohead(nn.Module):
 
-class ResUnet_refine_SPP(nn.Module):
+    def __init__(self, in_ch=1, out_ch=5, channels=32, blocks=3):
+        super(ResUNET_Twohead, self).__init__()
 
-    def __init__(self, channels=16, blocks=3):
-        super(ResUnet_refine_SPP, self).__init__()
-
+        self.in_conv = DoubleConv(in_ch, channels, stride=2, kernel_size=3)
         self.layer1 = make_res_layer(channels * 1, channels * 2, blocks, stride=2)
         self.layer2 = make_res_layer(channels * 2, channels * 4, blocks, stride=2)
         self.layer3 = make_res_layer(channels * 4, channels * 8, blocks, stride=2)
-        self.layer4 = make_res_layer(channels * 8, channels * 16, blocks, stride=2)
+        self.layer4 = make_res_layer(channels * 8, channels * 16, blocks, stride=2)       
 
         self.up5 = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
         self.conv5 = DoubleConv(channels * 24, channels * 8)
@@ -103,7 +104,6 @@ class ResUnet_refine_SPP(nn.Module):
         self.conv7 = DoubleConv(channels * 6, channels * 2)
         self.up8 = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
         self.conv8 = DoubleConv(channels * 3, channels)
-
 
         self.spp_up_conv1 = nn.Sequential(
                     conv1x1(channels*2, channels),
@@ -118,8 +118,20 @@ class ResUnet_refine_SPP(nn.Module):
                     nn.Upsample(scale_factor=8, mode='trilinear', align_corners=False)
                     )
 
+        self.heatmap_head = nn.Sequential(
+            DoubleConv(channels,channels),
+            DoubleConv(channels,channels),
+            nn.Conv3d(channels, out_ch, kernel_size=1)
+            )
+
+        self.regression_head = nn.Sequential(
+            DoubleConv(channels,channels),
+            DoubleConv(channels,channels),
+            nn.Conv3d(channels, out_ch*3, kernel_size=1)
+            )
+
     def forward(self, inpt):
-        c1 = inpt
+        c1 = self.in_conv(inpt)
         c2 = self.layer1(c1)
         c3 = self.layer2(c2)
         c4 = self.layer3(c3)
@@ -138,32 +150,25 @@ class ResUnet_refine_SPP(nn.Module):
         merge8 = torch.cat([up_8, c1], dim=1)
         c9 = self.conv8(merge8)
 
-        out1 = c9
-        out2 = self.spp_up_conv1(c8)
-        out3 = self.spp_up_conv2(c7)
-        out4 = self.spp_up_conv3(c6)
+        fea1 = c9
+        fea2 = self.spp_up_conv1(c8)
+        fea3 = self.spp_up_conv2(c7)
+        fea4 = self.spp_up_conv3(c6)
+        feas = F.interpolate(fea1+fea2+fea3+fea4, scale_factor=2, mode="trilinear")
+
+        out_heatmap = self.heatmap_head(feas)
+        out_regression = self.regression_head(feas)
+        B, C, D, H, W = out_regression.shape
         
-        out = out1+out2+out3+out4
-
-        return out
-
-
-
-class Cascaded_ResUnet_refine_SPP(nn.Module):
-    def __init__(self, in_ch, channels=12, blocks=2):
-        super(Cascaded_ResUnet_refine_SPP, self).__init__()
-        self.conv_in = DoubleConv(in_ch, channels, stride=2, kernel_size=3)
-        self.Unet1 = ResUnet_refine_SPP(channels, blocks)
-        self.Unet2 = ResUnet_refine_SPP(channels, blocks)
-    def forward(self, input):
-        fea = self.conv_in(input)
-        out1 = self.Unet1(fea)
-        out2 = self.Unet2(out1)
-        return out1, out2 
+        out_regression =  out_regression.contiguous().view(B, 3, -1, D, H, W)
+        out_regression = out_regression.permute(0, 2, 3, 4, 5, 1)
+        return out_heatmap, out_regression
 
 
 
 if __name__ == '__main__':
-    model = Cascaded_ResUnet_refine_SPP(1, 1)
-    print(model)
+    model = ResUNET_Twohead(in_ch=1, out_ch=5, channels=32, blocks=3).cuda()
+    x = torch.randn((1, 1, 96, 192, 192)).cuda()
+    out_heatmap, out_regression = model(x)
+    print(out_heatmap.shape, out_regression.shape)
 

@@ -5,23 +5,16 @@ class Model_Network(nn.Module):
 
     def __init__(
         self,
-        backbone,
-        head,
-        apply_sync_batchnorm=True
-    ):
+        backbone
+        ):
         super(Model_Network, self).__init__()
 
         self.backbone = backbone
-        self.head = head
-
         self.initialize_weights()
-        if apply_sync_batchnorm:
-            self._apply_sync_batchnorm()
 
     def forward(self, img):
         outs = self.backbone(img)
-        head_outs = self.head(outs)
-        return head_outs
+        return outs
 
     def initialize_weights(self):
         for m in self.modules():
@@ -37,8 +30,4 @@ class Model_Network(nn.Module):
                 m.bias.data.zero_()
 
 
-    def _apply_sync_batchnorm(self):
-        print('apply sync batch norm')
-        self.backbone = nn.SyncBatchNorm.convert_sync_batchnorm(self.backbone)
-        self.head = nn.SyncBatchNorm.convert_sync_batchnorm(self.head)
 

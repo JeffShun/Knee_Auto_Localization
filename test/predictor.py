@@ -64,7 +64,7 @@ class Predictor:
         from torch import jit
         self.net = jit.load(self.model_f, map_location=self.device)
         self.net.eval()
-        self.net.to(self.device).half()
+        self.net.to(self.device)
 
     def load_model_pth(self) -> None:
         # 加载动态图
@@ -72,7 +72,7 @@ class Predictor:
         checkpoint = torch.load(self.model_f, map_location=self.device)
         self.net.load_state_dict(checkpoint)
         self.net.eval()
-        self.net.to(self.device).half()
+        self.net.to(self.device)
 
     def load_model_onnx(self) -> None:
         # 加载onnx
@@ -83,7 +83,7 @@ class Predictor:
     def load_model_engine(self) -> None:
         TRT_LOGGER = trt.Logger()
         runtime = trt.Runtime(TRT_LOGGER)
-        with open(self.model.model_f, 'rb') as f:
+        with open(self.model_f, 'rb') as f:
             self.engine = runtime.deserialize_cuda_engine(f.read())
         self.context = self.engine.create_execution_context()
 
@@ -119,32 +119,47 @@ class Predictor:
         # Return only the host outputs.
         return [out.host for out in outputs]
 
-
+    def max_index(self, img):
+        b, c, d, h, w = img.shape
+        _, max_indices = torch.max(img.view(b, c, -1), dim=-1)
+        max_indices_3d = np.array([np.unravel_index(idx, (d, h, w)) for idx in max_indices.view(-1).tolist()])
+        max_indices_3d = torch.from_numpy(max_indices_3d.reshape(b, c, 3)).to(img.device)
+        return max_indices_3d
+    
     def predict(self, volume: np.ndarray):
         # 数据预处理
         shape = volume.shape
         volume = torch.from_numpy(volume).float()[None, None]
         volume = self._normlize(volume)
-        volume = self._resize_torch(volume, self.test_cfg.patch_size)
         # 模型预测
-        kp_heatmap  = self._forward(volume)
-        # 数据后处理
-        kp_heatmap = self._resize_torch(kp_heatmap, shape)
-        kp_heatmap = kp_heatmap.squeeze().cpu().detach().numpy()
-        ori_shape = kp_heatmap.shape
-        C = ori_shape[0]
-        kp_arr = kp_heatmap.reshape(C,-1)
-        max_index = np.argmax(kp_arr,1)
-        max_p = (np.arange(C), max_index)
-        kp_mask = np.zeros_like(kp_arr, dtype="uint8")
-        kp_mask[max_p] = 1
-        kp_mask = kp_mask.reshape(ori_shape)
+        kp_heatmap, regression = self._forward(volume)
+        max_index = self.max_index(kp_heatmap).squeeze().cpu().detach().numpy()
+        shift = regression.squeeze().cpu().detach().numpy()
+        kp_mask = np.zeros(kp_heatmap.shape[1:], dtype="uint8")
+        for i in range(max_index.shape[0]):
+            ori_kp_coords = max_index[i]
+            print(shift[i, ori_kp_coords[0], ori_kp_coords[1], ori_kp_coords[2]])
+            final_kp_coords = ori_kp_coords + shift[i, ori_kp_coords[0], ori_kp_coords[1], ori_kp_coords[2]]
+            kp_mask[i][tuple(np.round(final_kp_coords, decimals=0).astype("int32"))] = 1
+
+        # 对1，2，3点的z坐标进行矫正，使其相等
+        points = []
+        for i in range(kp_mask.shape[0]):
+            kp_i = list(zip(*np.where(kp_mask[i] == 1)))[0]
+            points.append(kp_i)
+        points = np.array(points)
+        z_correct = int((points[0,0] + points[1,0] + points[2,0]) / 3 + 0.5)   
+        points[0,0] = z_correct
+        points[1,0] = z_correct
+        points[2,0] = z_correct
         out_mask = np.zeros(shape, dtype="uint8")
         for i in range(kp_mask.shape[0]):
-            kp_dilate = dilation(kp_mask[i], np.ones([2, 4, 4]))
-            out_mask[kp_dilate==1] = i+1
-        return out_mask, kp_heatmap
-
+            mask_i = np.zeros(shape, dtype="uint8")
+            mask_i[tuple(points[i])] = 1
+            mask_dilate = dilation(mask_i, np.ones([2, 4, 4]))
+            out_mask[mask_dilate==1] = i+1
+        return out_mask, kp_heatmap.squeeze().cpu().detach().numpy(), points
+    
     def _forward(self, volume: torch.Tensor):
         # tensorrt预测
         if self.tensorrt_flag:
@@ -162,20 +177,24 @@ class Predictor:
             trt_outputs = self.trt_inference(self.context, bindings=bindings, inputs=inputs, outputs=outputs,stream=stream, batch_size=1)
             if cuda_ctx:
                 cuda_ctx.pop()
-            shape_of_output = [1, 5, 96, 192, 192]
-            output = trt_outputs[1].reshape(shape_of_output)
-            output = torch.from_numpy(output)
+            shape_of_output1 = [1, 5, 96, 192, 192]
+            shape_of_output2 = [1, 5, 96, 192, 192, 3]
+            output1 = trt_outputs[0].reshape(shape_of_output1)
+            output2 = trt_outputs[1].reshape(shape_of_output2)
+            output = torch.from_numpy(output1),  torch.from_numpy(output2)
 
         elif self.ort_flag:
             ort_outputs = self.ort_session.run(None, {"input": volume.numpy().astype(np.float32)})   
-            shape_of_output = [1, 5, 96, 192, 192]
-            output = ort_outputs[1].reshape(shape_of_output)
-            output = torch.from_numpy(output)
+            shape_of_output1 = [1, 5, 96, 192, 192]
+            shape_of_output2 = [1, 5, 96, 192, 192, 3]
+            output1 = ort_outputs[0].reshape(shape_of_output1)
+            output2 = ort_outputs[1].reshape(shape_of_output2)
+            output = torch.from_numpy(output1), torch.from_numpy(output2)
         else:
             # pytorch预测
             with torch.no_grad():
-                patch_gpu = volume.half().to(self.device)
-                _, output = self.net(patch_gpu)
+                patch_gpu = volume.to(self.device)
+                output = self.net(patch_gpu)
         return output
 
     def _normlize(self, data, win_clip=None):

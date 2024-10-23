@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding."""
@@ -85,10 +85,10 @@ class DoubleConv(nn.Module):
 
 
 
-class ResUnet_refine_SPP(nn.Module):
+class ResUnet_SPP(nn.Module):
 
     def __init__(self, channels=16, blocks=3):
-        super(ResUnet_refine_SPP, self).__init__()
+        super(ResUnet_SPP, self).__init__()
 
         self.layer1 = make_res_layer(channels * 1, channels * 2, blocks, stride=2)
         self.layer2 = make_res_layer(channels * 2, channels * 4, blocks, stride=2)
@@ -149,21 +149,33 @@ class ResUnet_refine_SPP(nn.Module):
 
 
 
-class Cascaded_ResUnet_refine_SPP(nn.Module):
-    def __init__(self, in_ch, channels=12, blocks=2):
-        super(Cascaded_ResUnet_refine_SPP, self).__init__()
+class Cascaded_ResUnet_SPP(nn.Module):
+    def __init__(self, in_ch, out_ch, channels=12, blocks=2):
+        super(Cascaded_ResUnet_SPP, self).__init__()
         self.conv_in = DoubleConv(in_ch, channels, stride=2, kernel_size=3)
-        self.Unet1 = ResUnet_refine_SPP(channels, blocks)
-        self.Unet2 = ResUnet_refine_SPP(channels, blocks)
+        self.Unet1 = ResUnet_SPP(channels, blocks)
+        self.Unet2 = ResUnet_SPP(channels, blocks)
+        self.conv_out1 = nn.Sequential(
+            DoubleConv(channels,channels),
+            DoubleConv(channels,channels),
+            nn.Conv3d(channels, out_ch, kernel_size=1)
+            )
+        self.conv_out2 = nn.Sequential(
+            DoubleConv(channels,channels),
+            DoubleConv(channels,channels),
+            nn.Conv3d(channels, out_ch, kernel_size=1)
+            )
     def forward(self, input):
         fea = self.conv_in(input)
-        out1 = self.Unet1(fea)
-        out2 = self.Unet2(out1)
+        u1 = self.Unet1(fea)
+        u2 = self.Unet2(u1)
+        out1 = self.conv_out1(F.interpolate(u1, scale_factor=2, mode="trilinear"))
+        out2 = self.conv_out2(F.interpolate(u2, scale_factor=2, mode="trilinear"))
         return out1, out2 
 
 
 
 if __name__ == '__main__':
-    model = Cascaded_ResUnet_refine_SPP(1, 1)
+    model = Cascaded_ResUnet_SPP(1, 1)
     print(model)
 

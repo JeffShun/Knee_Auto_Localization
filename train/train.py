@@ -28,7 +28,8 @@ def train():
     # 网络定义
     net = network_cfg.network.cuda()
     # 定义损失函数
-    loss_func = network_cfg.loss_func
+    train_loss_func = network_cfg.train_loss_func
+    valid_loss_func = network_cfg.valid_loss_func
 
     if os.path.exists(network_cfg.load_from):
         print("Load pretrain weight from: " + network_cfg.load_from)
@@ -65,13 +66,14 @@ def train():
             train_data = V(train_data).cuda()
             train_label = V(train_label).cuda()
             t_out = net(train_data)
-            t_loss = loss_func(t_out, train_label)
+            t_loss = train_loss_func(t_out, train_label)
             loss_all = V(torch.zeros(1)).cuda()
             loss_info = ""
             for loss_item, loss_val in t_loss.items():
                 loss_all += loss_val
                 loss_info += "{}={:.4f}\t ".format(loss_item,loss_val.item())
-                writer.add_scalar('TrainLoss/{}'.format(loss_item),loss_val.item(), epoch*len(train_dataloader)+ii+1)
+                if ii == 0:
+                    writer.add_scalar('TrainLoss/{}'.format(loss_item),loss_val.item(), epoch+1)
             time_temp=time.time()
             eta = ((network_cfg.total_epochs-epoch)+(1-(ii+1)/len(train_dataloader)))/(epoch+(ii+1)/len(train_dataloader))*(time_temp-time_start)/60
             if eta < 60:
@@ -96,7 +98,7 @@ def train():
                 valid_label = V(valid_label).cuda()
                 with torch.no_grad():
                     v_out = net(valid_data)
-                    v_loss = loss_func(v_out, valid_label)
+                    v_loss = valid_loss_func(v_out, valid_label)
                     
                 for loss_item, loss_val in v_loss.items():
                     if loss_item not in valid_loss:
@@ -107,7 +109,7 @@ def train():
             for loss_item, loss_val in valid_loss.items():
                 valid_loss[loss_item] /= (ii+1)
                 loss_info += "{}={:.4f}\t ".format(loss_item,valid_loss[loss_item])
-                writer.add_scalar('ValidLoss/{}'.format(loss_item),valid_loss[loss_item], (epoch+1)*len(train_dataloader))
+                writer.add_scalar('ValidLoss/{}'.format(loss_item),valid_loss[loss_item], (epoch+1))
             
             logger.info('Validating Step:\t {}'.format(loss_info))
             
