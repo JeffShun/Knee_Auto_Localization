@@ -41,7 +41,6 @@ Knee_Auto_Localization
    │  │  ├─ version_checkout.py  # 和model_backup.py配合使用，用于代码还原
    │  │  └─ __init__.py
    │  └─ __init__.py
-   ├─ README.md
    ├─ requirements.txt
    ├─ train.py  # 单卡训练入口
    ├─ train_data
